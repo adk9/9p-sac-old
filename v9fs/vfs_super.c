@@ -79,10 +79,16 @@ static int v9fs_set_super(struct super_block *s, void *data)
  *
  */
 
-static void
+static int
 v9fs_fill_super(struct super_block *sb, struct v9fs_session_info *v9ses,
-		int flags, void *data)
+		int flags, const char *dev_name, void *data)
 {
+	struct inode *inode = NULL;
+	struct dentry *root = NULL;
+	int mode = S_IRWXUGO | S_ISVTX;
+	struct p9_wstat *st = NULL;
+	struct p9_fid *fid;
+
 	sb->s_maxbytes = MAX_LFS_FILESIZE;
 	sb->s_blocksize_bits = fls(v9ses->maxdata - 1);
 	sb->s_blocksize = 1 << sb->s_blocksize_bits;
@@ -92,7 +98,39 @@ v9fs_fill_super(struct super_block *sb, struct v9fs_session_info *v9ses,
 	sb->s_flags = flags | MS_ACTIVE | MS_SYNCHRONOUS | MS_DIRSYNC |
 	    MS_NOATIME;
 
+	inode = v9fs_get_inode(sb, S_IFDIR | mode);
+	if (IS_ERR(inode))
+		return PTR_ERR(inode);
+
+	root = d_alloc_root(inode);
+	if (!root) {
+		iput(inode);
+		return -ENOMEM;
+	}
+
+	fid = v9fs_session_init(v9ses, dev_name, data);
+	if (IS_ERR(fid)) {
+		iput(inode);
+		return PTR_ERR(fid);
+	}
+
+	st = p9_client_stat(fid);
+	if (IS_ERR(st)) {
+		iput(inode);
+		p9_client_clunk(fid);
+		return PTR_ERR(st);
+	}
+
+	root->d_inode->i_ino = v9fs_qid2ino(&st->qid);
+	v9fs_stat2inode(st, root->d_inode, sb);
+
+	v9fs_fid_add(root, fid);
+	p9stat_free(st);
+	kfree(st);
+
+	sb->s_root = root;
 	save_mount_options(sb, data);
+	return 0;
 }
 
 /**
@@ -110,81 +148,33 @@ static int v9fs_get_sb(struct file_system_type *fs_type, int flags,
 		       struct vfsmount *mnt)
 {
 	struct super_block *sb = NULL;
-	struct inode *inode = NULL;
-	struct dentry *root = NULL;
 	struct v9fs_session_info *v9ses = NULL;
-	struct p9_wstat *st = NULL;
-	int mode = S_IRWXUGO | S_ISVTX;
-	struct p9_fid *fid;
-	int retval = 0;
+	int ret = 0;
 
 	P9_DPRINTK(P9_DEBUG_VFS, " \n");
 
-	v9ses = kzalloc(sizeof(struct v9fs_session_info), GFP_KERNEL);
-	if (!v9ses)
-		return -ENOMEM;
-
-	fid = v9fs_session_init(v9ses, dev_name, data);
-	if (IS_ERR(fid)) {
-		retval = PTR_ERR(fid);
-		goto close_session;
-	}
-
-	st = p9_client_stat(fid);
-	if (IS_ERR(st)) {
-		retval = PTR_ERR(st);
-		goto clunk_fid;
-	}
+	v9ses = v9fs_session_new(data);
+	if (IS_ERR(v9ses))
+		return PTR_ERR(v9ses);
 
 	sb = sget(fs_type, NULL, v9fs_set_super, v9ses);
 	if (IS_ERR(sb)) {
-		retval = PTR_ERR(sb);
-		goto free_stat;
-	}
-	v9fs_fill_super(sb, v9ses, flags, data);
-
-	inode = v9fs_get_inode(sb, S_IFDIR | mode);
-	if (IS_ERR(inode)) {
-		retval = PTR_ERR(inode);
-		goto release_sb;
+		v9fs_session_close(v9ses);
+		return PTR_ERR(sb);
 	}
 
-	root = d_alloc_root(inode);
-	if (!root) {
-		retval = -ENOMEM;
-		goto release_sb;
+	if (!sb->s_root) {
+		ret = v9fs_fill_super(sb, v9ses, flags, dev_name, data);
+		if (ret < 0) {
+			deactivate_locked_super(sb);
+			return ret;
+		}
 	}
 
-	sb->s_root = root;
-	root->d_inode->i_ino = v9fs_qid2ino(&st->qid);
-
-	v9fs_stat2inode(st, root->d_inode, sb);
-
-	v9fs_fid_add(root, fid);
-	p9stat_free(st);
-	kfree(st);
-
-P9_DPRINTK(P9_DEBUG_VFS, " simple set mount, return 0\n");
+	P9_DPRINTK(P9_DEBUG_VFS, " simple set mount, return 0\n");
+	sb->s_flags |= MS_ACTIVE;
 	simple_set_mnt(mnt, sb);
 	return 0;
-
-free_stat:
-	p9stat_free(st);
-	kfree(st);
-
-clunk_fid:
-	p9_client_clunk(fid);
-
-close_session:
-	v9fs_session_close(v9ses);
-	kfree(v9ses);
-	return retval;
-
-release_sb:
-	p9stat_free(st);
-	kfree(st);
-	deactivate_locked_super(sb);
-	return retval;
 }
 
 /**
@@ -198,13 +188,11 @@ static void v9fs_kill_super(struct super_block *s)
 	struct v9fs_session_info *v9ses = s->s_fs_info;
 
 	P9_DPRINTK(P9_DEBUG_VFS, " %p\n", s);
-
-	v9fs_dentry_release(s->s_root);	/* clunk root */
-
+	if (s->s_root)
+		v9fs_dentry_release(s->s_root);	/* clunk root */
 	kill_anon_super(s);
 
 	v9fs_session_close(v9ses);
-	kfree(v9ses);
 	s->s_fs_info = NULL;
 	P9_DPRINTK(P9_DEBUG_VFS, "exiting kill_super\n");
 }

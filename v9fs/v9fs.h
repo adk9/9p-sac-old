@@ -97,6 +97,7 @@ struct v9fs_session_info {
 
 extern struct dentry *v9fs_debugfs_root;
 
+struct v9fs_session_info *v9fs_session_new(const char *data);
 struct p9_fid *v9fs_session_init(struct v9fs_session_info *, const char *,
 									char *);
 void v9fs_session_close(struct v9fs_session_info *v9ses);

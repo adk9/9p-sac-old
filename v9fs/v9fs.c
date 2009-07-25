@@ -76,7 +76,7 @@ static const match_table_t tokens = {
  * Return 0 upon success, -ERRNO upon failure.
  */
 
-static int v9fs_parse_options(struct v9fs_session_info *v9ses, char *opts)
+static int v9fs_parse_options(struct v9fs_session_info *v9ses, const char *opts)
 {
 	char *options;
 	substring_t args[MAX_OPT_ARGS];
@@ -84,11 +84,6 @@ static int v9fs_parse_options(struct v9fs_session_info *v9ses, char *opts)
 	int option = 0;
 	char *s, *e;
 	int ret = 0;
-
-	/* setup defaults */
-	v9ses->afid = ~0;
-	v9ses->debug = 0;
-	v9ses->cache = 0;
 
 	if (!opts)
 		return 0;
@@ -176,6 +171,55 @@ static int v9fs_parse_options(struct v9fs_session_info *v9ses, char *opts)
 }
 
 /**
+ * v9fs_session_new - create a new session object
+ * @data: options
+ *
+ */
+struct v9fs_session_info *v9fs_session_new(const char *data)
+{
+	struct v9fs_session_info *v9ses = NULL;
+	int ret = 0;
+
+	v9ses = kzalloc(sizeof(struct v9fs_session_info), GFP_KERNEL);
+	if (!v9ses)
+		return ERR_PTR(-ENOMEM);
+
+	v9ses->uname = __getname();
+	if (!v9ses->uname) {
+		kfree(v9ses);
+		return ERR_PTR(-ENOMEM);
+	}
+
+	v9ses->aname = __getname();
+	if (!v9ses->aname) {
+		__putname(v9ses->uname);
+		kfree(v9ses);
+		return ERR_PTR(-ENOMEM);
+	}
+
+	/* setup defaults */
+	v9ses->flags = V9FS_EXTENDED | V9FS_ACCESS_USER;
+	strcpy(v9ses->uname, V9FS_DEFUSER);
+	strcpy(v9ses->aname, V9FS_DEFANAME);
+
+	v9ses->uid = ~0;
+	v9ses->dfltuid = V9FS_DEFUID;
+	v9ses->dfltgid = V9FS_DEFGID;
+	v9ses->afid = ~0;
+	v9ses->debug = 0;
+	v9ses->cache = 0;
+	v9ses->clnt = NULL;
+
+	ret = v9fs_parse_options(v9ses, data);
+	if (ret < 0) {
+		v9fs_session_close(v9ses);
+		return ERR_PTR(ret);
+	}
+
+	return v9ses;
+}
+
+/**
  * v9fs_session_init - initialize session
  * @v9ses: session information structure
  * @dev_name: device being mounted
@@ -186,39 +230,15 @@ static int v9fs_parse_options(struct v9fs_session_info *v9ses, char *opts)
 struct p9_fid *v9fs_session_init(struct v9fs_session_info *v9ses,
 		  const char *dev_name, char *data)
 {
-	int retval = -EINVAL;
 	struct p9_fid *fid;
-	int rc;
-
-	v9ses->uname = __getname();
-	if (!v9ses->uname)
-		return ERR_PTR(-ENOMEM);
-
-	v9ses->aname = __getname();
-	if (!v9ses->aname) {
-		__putname(v9ses->uname);
-		return ERR_PTR(-ENOMEM);
-	}
-
-	v9ses->flags = V9FS_EXTENDED | V9FS_ACCESS_USER;
-	strcpy(v9ses->uname, V9FS_DEFUSER);
-	strcpy(v9ses->aname, V9FS_DEFANAME);
-	v9ses->uid = ~0;
-	v9ses->dfltuid = V9FS_DEFUID;
-	v9ses->dfltgid = V9FS_DEFGID;
-
-	rc = v9fs_parse_options(v9ses, data);
-	if (rc < 0) {
-		retval = rc;
-		goto error;
-	}
+	int ret = 0;
 
 	v9ses->clnt = p9_client_create(dev_name, data);
 	if (IS_ERR(v9ses->clnt)) {
-		retval = PTR_ERR(v9ses->clnt);
-		v9ses->clnt = NULL;
+		ret = PTR_ERR(v9ses->clnt);
 		P9_DPRINTK(P9_DEBUG_ERROR, "problem initializing 9p client\n");
-		goto error;
+		v9ses->clnt = NULL;
+		return ERR_PTR(ret);
 	}
 
 	if (!v9ses->clnt->dotu)
@@ -229,7 +249,6 @@ struct p9_fid *v9fs_session_init(struct v9fs_session_info *v9ses,
 	/* for legacy mode, fall back to V9FS_ACCESS_ANY */
 	if (!v9fs_extended(v9ses) &&
 		((v9ses->flags&V9FS_ACCESS_MASK) == V9FS_ACCESS_USER)) {
-
 		v9ses->flags &= ~V9FS_ACCESS_MASK;
 		v9ses->flags |= V9FS_ACCESS_ANY;
 		v9ses->uid = ~0;
@@ -238,10 +257,8 @@ struct p9_fid *v9fs_session_init(struct v9fs_session_info *v9ses,
 	fid = p9_client_attach(v9ses->clnt, NULL, v9ses->uname, ~0,
 							v9ses->aname);
 	if (IS_ERR(fid)) {
-		retval = PTR_ERR(fid);
-		fid = NULL;
 		P9_DPRINTK(P9_DEBUG_ERROR, "cannot attach\n");
-		goto error;
+		return ERR_CAST(fid);
 	}
 
 	if ((v9ses->flags & V9FS_ACCESS_MASK) == V9FS_ACCESS_SINGLE)
@@ -250,9 +267,6 @@ struct p9_fid *v9fs_session_init(struct v9fs_session_info *v9ses,
 		fid->uid = ~0;
 
 	return fid;
-
-error:
-	return ERR_PTR(retval);
 }
 
 /**
@@ -270,6 +284,7 @@ void v9fs_session_close(struct v9fs_session_info *v9ses)
 
 	__putname(v9ses->uname);
 	__putname(v9ses->aname);
+	kfree(v9ses);
 }
 
 /**
