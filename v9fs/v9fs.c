@@ -42,11 +42,14 @@
 
 enum {
 	/* Options that take integer arguments */
-	Opt_debug, Opt_dfltuid, Opt_dfltgid, Opt_afid,
+	Opt_debug, Opt_dfltuid, Opt_dfltgid, 
+	Opt_afid, Opt_msize, Opt_port, 
+	Opt_rfdno, Opt_wfdno, Opt_rq_depth, 
+	Opt_sq_depth, Opt_timeout,
 	/* String options */
 	Opt_uname, Opt_remotename, Opt_trans,
 	/* Options that take no arguments */
-	Opt_nodevmap,
+	Opt_nodevmap, Opt_legacy,
 	/* Cache options */
 	Opt_cache_loose,
 	/* Access options */
@@ -57,21 +60,31 @@ enum {
 
 static const match_table_t tokens = {
 	{Opt_debug, "debug=%x"},
+	{Opt_port, "port=%u"},
+	{Opt_legacy, "noextend"},
+	{Opt_trans, "trans=%s"},
 	{Opt_dfltuid, "dfltuid=%u"},
 	{Opt_dfltgid, "dfltgid=%u"},
 	{Opt_afid, "afid=%u"},
+	{Opt_msize, "msize=%u"},
 	{Opt_uname, "uname=%s"},
 	{Opt_remotename, "aname=%s"},
 	{Opt_nodevmap, "nodevmap"},
 	{Opt_cache_loose, "cache=loose"},
 	{Opt_cache_loose, "loose"},
 	{Opt_access, "access=%s"},
+	{Opt_rfdno, "rfdno=%u"},
+	{Opt_wfdno, "wfdno=%u"},
+	{Opt_sq_depth, "sq=%u"},
+	{Opt_rq_depth, "rq=%u"},
+	{Opt_timeout, "timeout=%u"},
 	{Opt_err, NULL}
 };
 
 /**
  * v9fs_parse_options - parse mount options into session structure
  * @v9ses: existing v9fs session information
+ * @opts: options string passed from mount
  *
  * Return 0 upon success, -ERRNO upon failure.
  */
@@ -84,6 +97,7 @@ static int v9fs_parse_options(struct v9fs_session_info *v9ses, const char *opts)
 	int option = 0;
 	char *s, *e;
 	int ret = 0;
+	struct p9_client_opts *copts = v9ses->options;
 
 	if (!opts)
 		return 0;
@@ -117,6 +131,15 @@ static int v9fs_parse_options(struct v9fs_session_info *v9ses, const char *opts)
 #endif
 			break;
 
+		case Opt_port:
+			copts->trans_opts->port = option;
+			break;
+		case Opt_legacy:
+			copts->dotu = 0;
+			break;
+		case Opt_trans:
+			copts->transport = v9fs_get_trans_by_name(&args[0]);
+			break;
 		case Opt_dfltuid:
 			v9ses->dfltuid = option;
 			break;
@@ -125,6 +148,9 @@ static int v9fs_parse_options(struct v9fs_session_info *v9ses, const char *opts)
 			break;
 		case Opt_afid:
 			v9ses->afid = option;
+			break;
+		case Opt_msize:
+			copts->msize = option;
 			break;
 		case Opt_uname:
 			match_strlcpy(v9ses->uname, &args[0], PATH_MAX);
@@ -138,7 +164,6 @@ static int v9fs_parse_options(struct v9fs_session_info *v9ses, const char *opts)
 		case Opt_cache_loose:
 			v9ses->cache = CACHE_LOOSE;
 			break;
-
 		case Opt_access:
 			s = match_strdup(&args[0]);
 			if (!s) {
@@ -161,7 +186,21 @@ static int v9fs_parse_options(struct v9fs_session_info *v9ses, const char *opts)
 			}
 			kfree(s);
 			break;
-
+		case Opt_rfdno:
+			copts->trans_opts->rfd = option;
+			break;
+		case Opt_wfdno:
+			copts->trans_opts->wfd = option;
+			break;
+		case Opt_sq_depth:
+			copts->trans_opts->sq_depth = option;
+			break;
+		case Opt_rq_depth:
+			copts->trans_opts->rq_depth = option;
+			break;
+		case Opt_timeout:
+			copts->trans_opts->timeout = option;
+			break;
 		default:
 			continue;
 		}
@@ -172,29 +211,49 @@ static int v9fs_parse_options(struct v9fs_session_info *v9ses, const char *opts)
 
 /**
  * v9fs_session_new - create a new session object
+ * @addr: remote server address
  * @data: options
  *
  */
-struct v9fs_session_info *v9fs_session_new(const char *data)
+struct v9fs_session_info *v9fs_session_new(const char *dev_name, const char *data)
 {
 	struct v9fs_session_info *v9ses = NULL;
+	struct p9_client_opts *opts = NULL;
 	int ret = 0;
 
 	v9ses = kzalloc(sizeof(struct v9fs_session_info), GFP_KERNEL);
 	if (!v9ses)
 		return ERR_PTR(-ENOMEM);
 
+	opts = kzalloc(sizeof(*opts), GFP_KERNEL);
+	if (!opts) {
+		ret = -ENOMEM;
+		P9_EPRINTK(KERN_ERR,
+			   "failed to allocate the client opts structure\n");
+		goto error;
+	}
+
+	opts->trans_opts = kzalloc(sizeof(struct p9_trans_opts), GFP_KERNEL);
+	if (!opts->trans_opts) {
+		ret = -ENOMEM;
+		kfree(opts);
+		P9_EPRINTK(KERN_ERR,
+			   "failed to allocate trans-specific opts structure\n");
+		goto error;
+	}
+
+	v9ses->options = opts;
 	v9ses->uname = __getname();
 	if (!v9ses->uname) {
-		kfree(v9ses);
-		return ERR_PTR(-ENOMEM);
+		ret = -ENOMEM;
+		goto free_options;
 	}
 
 	v9ses->aname = __getname();
 	if (!v9ses->aname) {
+		ret = -ENOMEM;
 		__putname(v9ses->uname);
-		kfree(v9ses);
-		return ERR_PTR(-ENOMEM);
+		goto free_options;
 	}
 
 	/* setup defaults */
@@ -210,13 +269,36 @@ struct v9fs_session_info *v9fs_session_new(const char *data)
 	v9ses->cache = 0;
 	v9ses->clnt = NULL;
 
+	opts->dotu = 1;
+	opts->msize = 8192;
+	opts->transport = NULL;
+
+	opts->trans_opts->addr = (char *) dev_name;
+	opts->trans_opts->port = 0;
+	opts->trans_opts->rfd = ~0;
+	opts->trans_opts->wfd = ~0;
+
+	opts->trans_opts->sq_depth = 0;
+	opts->trans_opts->rq_depth = 0;
+	opts->trans_opts->timeout = 0;
+
 	ret = v9fs_parse_options(v9ses, data);
-	if (ret < 0) {
-		v9fs_session_close(v9ses);
-		return ERR_PTR(ret);
-	}
+	if (ret < 0)
+		goto free_names;
 
 	return v9ses;
+
+free_names:
+	__putname(v9ses->uname);
+	__putname(v9ses->aname);
+
+free_options:
+	kfree(v9ses->options->trans_opts);
+	kfree(v9ses->options);
+
+error:
+	kfree(v9ses);
+	return ERR_PTR(ret);
 }
 
 /**
@@ -233,7 +315,7 @@ struct p9_fid *v9fs_session_init(struct v9fs_session_info *v9ses,
 	struct p9_fid *fid;
 	int ret = 0;
 
-	v9ses->clnt = p9_client_create(dev_name, data);
+	v9ses->clnt = p9_client_create(v9ses->options);
 	if (IS_ERR(v9ses->clnt)) {
 		ret = PTR_ERR(v9ses->clnt);
 		P9_DPRINTK(P9_DEBUG_ERROR, "problem initializing 9p client\n");
@@ -284,6 +366,8 @@ void v9fs_session_close(struct v9fs_session_info *v9ses)
 
 	__putname(v9ses->uname);
 	__putname(v9ses->aname);
+	kfree(v9ses->options->trans_opts);
+	kfree(v9ses->options);
 	kfree(v9ses);
 }
 

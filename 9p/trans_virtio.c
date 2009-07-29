@@ -270,8 +270,7 @@ fail:
 /**
  * p9_virtio_create - allocate a new virtio channel
  * @client: client instance invoking this transport
- * @devname: string identifying the channel to connect to (unused)
- * @args: args passed from sys_mount() for per-transport options (unused)
+ * @opts: v9fs transport-specific mount options (unused)
  *
  * This sets up a transport channel for 9p communication.  Right now
  * we only match the first available channel, but eventually we couldlook up
@@ -288,7 +287,7 @@ fail:
  */
 
 static int
-p9_virtio_create(struct p9_client *client, const char *devname, char *args)
+p9_virtio_create(struct p9_client *client, struct p9_trans_opts *opts)
 {
 	struct virtio_chan *chan = channels;
 	int index = 0;

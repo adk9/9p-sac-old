@@ -108,6 +108,23 @@ struct p9_req_t {
 };
 
 /**
+ * struct p9_client_opts - per-client mount options
+ *
+ * @msize: max data size negotiated by the protocol
+ * @dotu: extension flags negotiated by the protocol
+ * @transport: transport module associated with this session
+ * @trans_opts: mount options for the transport module
+ *
+ */
+
+struct p9_client_opts {
+	int msize;
+	unsigned char dotu;
+	struct p9_trans_module *transport;
+	struct p9_trans_opts *trans_opts;
+};
+
+/**
  * struct p9_client - per client instance state
  * @lock: protect @fidlist
  * @msize: maximum data size negotiated by protocol
@@ -183,7 +200,7 @@ struct p9_fid {
 };
 
 int p9_client_version(struct p9_client *);
-struct p9_client *p9_client_create(const char *dev_name, char *options);
+struct p9_client *p9_client_create(struct p9_client_opts *);
 void p9_client_destroy(struct p9_client *clnt);
 void p9_client_disconnect(struct p9_client *clnt);
 struct p9_fid *p9_client_attach(struct p9_client *clnt, struct p9_fid *afid,

@@ -153,7 +153,7 @@ static int v9fs_get_sb(struct file_system_type *fs_type, int flags,
 
 	P9_DPRINTK(P9_DEBUG_VFS, " \n");
 
-	v9ses = v9fs_session_new(data);
+	v9ses = v9fs_session_new(dev_name, data);
 	if (IS_ERR(v9ses))
 		return PTR_ERR(v9ses);
 

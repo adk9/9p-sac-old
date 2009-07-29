@@ -123,103 +123,6 @@ struct p9_rdma_context {
 	};
 };
 
-/**
- * p9_rdma_opts - Collection of mount options
- * @port: port of connection
- * @sq_depth: The requested depth of the SQ. This really doesn't need
- * to be any deeper than the number of threads used in the client
- * @rq_depth: The depth of the RQ. Should be greater than or equal to SQ depth
- * @timeout: Time to wait in msecs for CM events
- */
-struct p9_rdma_opts {
-	short port;
-	int sq_depth;
-	int rq_depth;
-	long timeout;
-};
-
-/*
- * Option Parsing (code inspired by NFS code)
- */
-enum {
-	/* Options that take integer arguments */
-	Opt_port, Opt_rq_depth, Opt_sq_depth, Opt_timeout, Opt_err,
-};
-
-static match_table_t tokens = {
-	{Opt_port, "port=%u"},
-	{Opt_sq_depth, "sq=%u"},
-	{Opt_rq_depth, "rq=%u"},
-	{Opt_timeout, "timeout=%u"},
-	{Opt_err, NULL},
-};
-
-/**
- * parse_opts - parse mount options into rdma options structure
- * @params: options string passed from mount
- * @opts: rdma transport-specific structure to parse options into
- *
- * Returns 0 upon success, -ERRNO upon failure
- */
-static int parse_opts(char *params, struct p9_rdma_opts *opts)
-{
-	char *p;
-	substring_t args[MAX_OPT_ARGS];
-	int option;
-	char *options;
-	int ret;
-
-	opts->port = P9_PORT;
-	opts->sq_depth = P9_RDMA_SQ_DEPTH;
-	opts->rq_depth = P9_RDMA_RQ_DEPTH;
-	opts->timeout = P9_RDMA_TIMEOUT;
-
-	if (!params)
-		return 0;
-
-	options = kstrdup(params, GFP_KERNEL);
-	if (!options) {
-		P9_DPRINTK(P9_DEBUG_ERROR,
-			   "failed to allocate copy of option string\n");
-		return -ENOMEM;
-	}
-
-	while ((p = strsep(&options, ",")) != NULL) {
-		int token;
-		int r;
-		if (!*p)
-			continue;
-		token = match_token(p, tokens, args);
-		r = match_int(&args[0], &option);
-		if (r < 0) {
-			P9_DPRINTK(P9_DEBUG_ERROR,
-				   "integer field, but no integer?\n");
-			ret = r;
-			continue;
-		}
-		switch (token) {
-		case Opt_port:
-			opts->port = option;
-			break;
-		case Opt_sq_depth:
-			opts->sq_depth = option;
-			break;
-		case Opt_rq_depth:
-			opts->rq_depth = option;
-			break;
-		case Opt_timeout:
-			opts->timeout = option;
-			break;
-		default:
-			continue;
-		}
-	}
-	/* RQ must be at least as large as the SQ */
-	opts->rq_depth = max(opts->rq_depth, opts->sq_depth);
-	kfree(options);
-	return 0;
-}
-
 static int
 p9_cm_event_handler(struct rdma_cm_id *id, struct rdma_cm_event *event)
 {
@@ -532,9 +435,21 @@ static void rdma_close(struct p9_client *client)
  * alloc_rdma - Allocate and initialize the rdma transport structure
  * @opts: Mount options structure
  */
-static struct p9_trans_rdma *alloc_rdma(struct p9_rdma_opts *opts)
+static struct p9_trans_rdma *alloc_rdma(struct p9_trans_opts *opts)
 {
 	struct p9_trans_rdma *rdma;
+
+	if (!opts->port)
+		opts->port = P9_PORT;
+
+	if (!opts->sq_depth)
+		opts->sq_depth = P9_RDMA_SQ_DEPTH;
+
+	if (!opts->rq_depth)
+		opts->rq_depth = P9_RDMA_RQ_DEPTH;
+
+	if (!opts->timeout)
+		opts->timeout = P9_RDMA_TIMEOUT;
 
 	rdma = kzalloc(sizeof(struct p9_trans_rdma), GFP_KERNEL);
 	if (!rdma)
@@ -560,26 +475,19 @@ static int rdma_cancel(struct p9_client *client, struct p9_req_t *req)
 /**
  * trans_create_rdma - Transport method for creating atransport instance
  * @client: client instance
- * @addr: IP address string
- * @args: Mount options string
+ * @opts: transport options passed through the mount string
  */
 static int
-rdma_create_trans(struct p9_client *client, const char *addr, char *args)
+rdma_create_trans(struct p9_client *client, struct p9_trans_opts *opts)
 {
 	int err;
-	struct p9_rdma_opts opts;
 	struct p9_trans_rdma *rdma;
 	struct rdma_conn_param conn_param;
 	struct ib_qp_init_attr qp_attr;
 	struct ib_device_attr devattr;
 
-	/* Parse the transport specific mount options */
-	err = parse_opts(args, &opts);
-	if (err < 0)
-		return err;
-
 	/* Create and initialize the RDMA transport structure */
-	rdma = alloc_rdma(&opts);
+	rdma = alloc_rdma(opts);
 	if (!rdma)
 		return -ENOMEM;
 
@@ -593,8 +501,8 @@ rdma_create_trans(struct p9_client *client, const char *addr, char *args)
 
 	/* Resolve the server's address */
 	rdma->addr.sin_family = AF_INET;
-	rdma->addr.sin_addr.s_addr = in_aton(addr);
-	rdma->addr.sin_port = htons(opts.port);
+	rdma->addr.sin_addr.s_addr = in_aton(opts->addr);
+	rdma->addr.sin_port = htons(opts->port);
 	err = rdma_resolve_addr(rdma->cm_id, NULL,
 				(struct sockaddr *)&rdma->addr,
 				rdma->timeout);
@@ -620,7 +528,7 @@ rdma_create_trans(struct p9_client *client, const char *addr, char *args)
 	/* Create the Completion Queue */
 	rdma->cq = ib_create_cq(rdma->cm_id->device, cq_comp_handler,
 				cq_event_handler, client,
-				opts.sq_depth + opts.rq_depth + 1, 0);
+				opts->sq_depth + opts->rq_depth + 1, 0);
 	if (IS_ERR(rdma->cq))
 		goto error;
 	ib_req_notify_cq(rdma->cq, IB_CQ_NEXT_COMP);
@@ -645,8 +553,8 @@ rdma_create_trans(struct p9_client *client, const char *addr, char *args)
 	memset(&qp_attr, 0, sizeof qp_attr);
 	qp_attr.event_handler = qp_event_handler;
 	qp_attr.qp_context = client;
-	qp_attr.cap.max_send_wr = opts.sq_depth;
-	qp_attr.cap.max_recv_wr = opts.rq_depth;
+	qp_attr.cap.max_send_wr = opts->sq_depth;
+	qp_attr.cap.max_recv_wr = opts->rq_depth;
 	qp_attr.cap.max_send_sge = P9_RDMA_SEND_SGE;
 	qp_attr.cap.max_recv_sge = P9_RDMA_RECV_SGE;
 	qp_attr.sq_sig_type = IB_SIGNAL_REQ_WR;

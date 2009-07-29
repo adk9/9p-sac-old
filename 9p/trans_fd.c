@@ -47,20 +47,6 @@
 #define MAXPOLLWADDR	2
 
 /**
- * struct p9_fd_opts - per-transport options
- * @rfd: file descriptor for reading (trans=fd)
- * @wfd: file descriptor for writing (trans=fd)
- * @port: port to connect to (trans=tcp)
- *
- */
-
-struct p9_fd_opts {
-	int rfd;
-	int wfd;
-	u16 port;
-};
-
-/**
  * struct p9_trans_fd - transport state
  * @rd: reference to file to read from
  * @wr: reference of file to write to
@@ -72,23 +58,6 @@ struct p9_trans_fd {
 	struct file *rd;
 	struct file *wr;
 	struct p9_conn *conn;
-};
-
-/*
-  * Option Parsing (code inspired by NFS code)
-  *  - a little lazy - parse all fd-transport options
-  */
-
-enum {
-	/* Options that take integer arguments */
-	Opt_port, Opt_rfdno, Opt_wfdno, Opt_err,
-};
-
-static const match_table_t tokens = {
-	{Opt_port, "port=%u"},
-	{Opt_rfdno, "rfdno=%u"},
-	{Opt_wfdno, "wfdno=%u"},
-	{Opt_err, NULL},
 };
 
 enum {
@@ -699,69 +668,6 @@ static int p9_fd_cancel(struct p9_client *client, struct p9_req_t *req)
 	return ret;
 }
 
-/**
- * parse_opts - parse mount options into p9_fd_opts structure
- * @params: options string passed from mount
- * @opts: fd transport-specific structure to parse options into
- *
- * Returns 0 upon success, -ERRNO upon failure
- */
-
-static int parse_opts(char *params, struct p9_fd_opts *opts)
-{
-	char *p;
-	substring_t args[MAX_OPT_ARGS];
-	int option;
-	char *options;
-	int ret;
-
-	opts->port = P9_PORT;
-	opts->rfd = ~0;
-	opts->wfd = ~0;
-
-	if (!params)
-		return 0;
-
-	options = kstrdup(params, GFP_KERNEL);
-	if (!options) {
-		P9_DPRINTK(P9_DEBUG_ERROR,
-				"failed to allocate copy of option string\n");
-		return -ENOMEM;
-	}
-
-	while ((p = strsep(&options, ",")) != NULL) {
-		int token;
-		int r;
-		if (!*p)
-			continue;
-		token = match_token(p, tokens, args);
-		if (token != Opt_err) {
-			r = match_int(&args[0], &option);
-			if (r < 0) {
-				P9_DPRINTK(P9_DEBUG_ERROR,
-				"integer field, but no integer?\n");
-				ret = r;
-				continue;
-			}
-		}
-		switch (token) {
-		case Opt_port:
-			opts->port = option;
-			break;
-		case Opt_rfdno:
-			opts->rfd = option;
-			break;
-		case Opt_wfdno:
-			opts->wfd = option;
-			break;
-		default:
-			continue;
-		}
-	}
-	kfree(options);
-	return 0;
-}
-
 static int p9_fd_open(struct p9_client *client, int rfd, int wfd)
 {
 	struct p9_trans_fd *ts = kmalloc(sizeof(struct p9_trans_fd),
@@ -877,26 +783,24 @@ static inline int valid_ipaddr4(const char *buf)
 }
 
 static int
-p9_fd_create_tcp(struct p9_client *client, const char *addr, char *args)
+p9_fd_create_tcp(struct p9_client *client, struct p9_trans_opts *opts)
 {
 	int err;
 	struct socket *csocket;
 	struct sockaddr_in sin_server;
-	struct p9_fd_opts opts;
 	struct p9_trans_fd *p = NULL; /* this gets allocated in p9_fd_open */
 
-	err = parse_opts(args, &opts);
-	if (err < 0)
-		return err;
-
-	if (valid_ipaddr4(addr) < 0)
+	if (valid_ipaddr4(opts->addr) < 0)
 		return -EINVAL;
 
 	csocket = NULL;
 
+	if (!opts->port)
+		opts->port = P9_PORT;
+
 	sin_server.sin_family = AF_INET;
-	sin_server.sin_addr.s_addr = in_aton(addr);
-	sin_server.sin_port = htons(opts.port);
+	sin_server.sin_addr.s_addr = in_aton(opts->addr);
+	sin_server.sin_port = htons(opts->port);
 	sock_create_kern(PF_INET, SOCK_STREAM, IPPROTO_TCP, &csocket);
 
 	if (!csocket) {
@@ -911,7 +815,7 @@ p9_fd_create_tcp(struct p9_client *client, const char *addr, char *args)
 	if (err < 0) {
 		P9_EPRINTK(KERN_ERR,
 			"p9_trans_tcp: problem connecting socket to %s\n",
-			addr);
+			opts->addr);
 		goto error;
 	}
 
@@ -939,7 +843,7 @@ error:
 }
 
 static int
-p9_fd_create_unix(struct p9_client *client, const char *addr, char *args)
+p9_fd_create_unix(struct p9_client *client, struct p9_trans_opts *opts)
 {
 	int err;
 	struct socket *csocket;
@@ -948,22 +852,22 @@ p9_fd_create_unix(struct p9_client *client, const char *addr, char *args)
 
 	csocket = NULL;
 
-	if (strlen(addr) > UNIX_PATH_MAX) {
+	if (strlen(opts->addr) > UNIX_PATH_MAX) {
 		P9_EPRINTK(KERN_ERR, "p9_trans_unix: address too long: %s\n",
-			addr);
+			opts->addr);
 		err = -ENAMETOOLONG;
 		goto error;
 	}
 
 	sun_server.sun_family = PF_UNIX;
-	strcpy(sun_server.sun_path, addr);
+	strcpy(sun_server.sun_path, opts->addr);
 	sock_create_kern(PF_UNIX, SOCK_STREAM, 0, &csocket);
 	err = csocket->ops->connect(csocket, (struct sockaddr *)&sun_server,
 			sizeof(struct sockaddr_un) - 1, 0);
 	if (err < 0) {
 		P9_EPRINTK(KERN_ERR,
 			"p9_trans_unix: problem connecting socket: %s: %d\n",
-			addr, err);
+			opts->addr, err);
 		goto error;
 	}
 
@@ -990,20 +894,17 @@ error:
 }
 
 static int
-p9_fd_create(struct p9_client *client, const char *addr, char *args)
+p9_fd_create(struct p9_client *client, struct p9_trans_opts *opts)
 {
 	int err;
-	struct p9_fd_opts opts;
 	struct p9_trans_fd *p = NULL; /* this get allocated in p9_fd_open */
 
-	parse_opts(args, &opts);
-
-	if (opts.rfd == ~0 || opts.wfd == ~0) {
+	if (opts->rfd == ~0 || opts->wfd == ~0) {
 		printk(KERN_ERR "v9fs: Insufficient options for proto=fd\n");
 		return -ENOPROTOOPT;
 	}
 
-	err = p9_fd_open(client, opts.rfd, opts.wfd);
+	err = p9_fd_open(client, opts->rfd, opts->wfd);
 	if (err < 0)
 		goto error;
 

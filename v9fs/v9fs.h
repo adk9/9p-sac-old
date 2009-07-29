@@ -60,7 +60,7 @@ enum p9_cache_modes {
  * @debug: debug level
  * @afid: authentication handle
  * @cache: cache mode of type &p9_cache_modes
- * @options: copy of options string given by user
+ * @options: client option parameters given by user
  * @uname: string user name to mount hierarchy as
  * @aname: mount specifier for remote hierarchy
  * @maxdata: maximum data to be sent/recvd per protocol message
@@ -84,6 +84,7 @@ struct v9fs_session_info {
 	unsigned short debug;
 	unsigned int afid;
 	unsigned int cache;
+	struct p9_client_opts *options;
 
 	char *uname;		/* user name to mount as */
 	char *aname;		/* name of remote hierarchy being mounted */
@@ -97,7 +98,7 @@ struct v9fs_session_info {
 
 extern struct dentry *v9fs_debugfs_root;
 
-struct v9fs_session_info *v9fs_session_new(const char *data);
+struct v9fs_session_info *v9fs_session_new(const char *, const char *);
 struct p9_fid *v9fs_session_init(struct v9fs_session_info *, const char *,
 									char *);
 void v9fs_session_close(struct v9fs_session_info *v9ses);
@@ -106,7 +107,6 @@ void v9fs_session_cancel(struct v9fs_session_info *v9ses);
 #define V9FS_MAGIC 0x01021997
 
 /* other default globals */
-#define V9FS_PORT	564
 #define V9FS_DEFUSER	"nobody"
 #define V9FS_DEFANAME	""
 #define V9FS_DEFUID	(-2)

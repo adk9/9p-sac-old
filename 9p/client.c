@@ -37,89 +37,8 @@
 #include "transport.h"
 #include "protocol.h"
 
-/*
-  * Client Option Parsing (code inspired by NFS code)
-  *  - a little lazy - parse all client options
-  */
-
-enum {
-	Opt_msize,
-	Opt_trans,
-	Opt_legacy,
-	Opt_err,
-};
-
-static const match_table_t tokens = {
-	{Opt_msize, "msize=%u"},
-	{Opt_legacy, "noextend"},
-	{Opt_trans, "trans=%s"},
-	{Opt_err, NULL},
-};
-
 static struct p9_req_t *
 p9_client_rpc(struct p9_client *c, int8_t type, const char *fmt, ...);
-
-/**
- * parse_options - parse mount options into client structure
- * @opts: options string passed from mount
- * @clnt: existing v9fs client information
- *
- * Return 0 upon success, -ERRNO upon failure
- */
-
-static int parse_opts(char *opts, struct p9_client *clnt)
-{
-	char *options;
-	char *p;
-	substring_t args[MAX_OPT_ARGS];
-	int option;
-	int ret = 0;
-
-	clnt->dotu = 1;
-	clnt->msize = 8192;
-
-	if (!opts)
-		return 0;
-
-	options = kstrdup(opts, GFP_KERNEL);
-	if (!options) {
-		P9_DPRINTK(P9_DEBUG_ERROR,
-				"failed to allocate copy of option string\n");
-		return -ENOMEM;
-	}
-
-	while ((p = strsep(&options, ",")) != NULL) {
-		int token;
-		if (!*p)
-			continue;
-		token = match_token(p, tokens, args);
-		if (token < Opt_trans) {
-			int r = match_int(&args[0], &option);
-			if (r < 0) {
-				P9_DPRINTK(P9_DEBUG_ERROR,
-					"integer field, but no integer?\n");
-				ret = r;
-				continue;
-			}
-		}
-		switch (token) {
-		case Opt_msize:
-			clnt->msize = option;
-			break;
-		case Opt_trans:
-			clnt->trans_mod = v9fs_get_trans_by_name(&args[0]);
-			break;
-		case Opt_legacy:
-			clnt->dotu = 0;
-			break;
-		default:
-			continue;
-		}
-	}
-
-	kfree(options);
-	return ret;
-}
 
 /**
  * p9_tag_alloc - lookup/allocate a request by tag
@@ -659,7 +578,7 @@ error:
 }
 EXPORT_SYMBOL(p9_client_version);
 
-struct p9_client *p9_client_create(const char *dev_name, char *options)
+struct p9_client *p9_client_create(struct p9_client_opts *copts)
 {
 	int err;
 	struct p9_client *clnt;
@@ -669,7 +588,9 @@ struct p9_client *p9_client_create(const char *dev_name, char *options)
 	if (!clnt)
 		return ERR_PTR(-ENOMEM);
 
-	clnt->trans_mod = NULL;
+	clnt->dotu = copts->dotu;
+	clnt->msize = copts->msize;
+
 	clnt->trans = NULL;
 	spin_lock_init(&clnt->lock);
 	INIT_LIST_HEAD(&clnt->fidlist);
@@ -682,10 +603,7 @@ struct p9_client *p9_client_create(const char *dev_name, char *options)
 
 	p9_tag_init(clnt);
 
-	err = parse_opts(options, clnt);
-	if (err < 0)
-		goto error;
-
+	clnt->trans_mod = copts->transport;
 	if (!clnt->trans_mod)
 		clnt->trans_mod = v9fs_get_default_trans();
 
@@ -699,7 +617,7 @@ struct p9_client *p9_client_create(const char *dev_name, char *options)
 	P9_DPRINTK(P9_DEBUG_MUX, "clnt %p trans %p msize %d dotu %d\n",
 		clnt, clnt->trans_mod, clnt->msize, clnt->dotu);
 
-	err = clnt->trans_mod->create(clnt, dev_name, options);
+	err = clnt->trans_mod->create(clnt, copts->trans_opts);
 	if (err)
 		goto error;
 
