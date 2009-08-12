@@ -72,6 +72,28 @@ done:
 	return retval;
 }
 
+/**
+ * v9fs_vfs_readpages - read a set of pages from 9P
+ *
+ * @filp: file being read
+ * @mapping: the address space
+ * @pages: list of pages to read
+ * @nr_pages: count of pages to read
+ *
+ */
+
+static int v9fs_vfs_readpages(struct file *filp, struct address_space *mapping,
+			     struct list_head *pages, unsigned nr_pages)
+{
+	int ret = 0;
+
+	P9_DPRINTK(P9_DEBUG_VFS, "inode: %p file: %p\n", mapping->host, filp);
+	ret = read_cache_pages(mapping, pages, (void *)v9fs_vfs_readpage, filp);
+	P9_DPRINTK(P9_DEBUG_VFS, "  = %d\n", ret);
+	return ret;
+}
+
 const struct address_space_operations v9fs_addr_operations = {
       .readpage = v9fs_vfs_readpage,
+      .readpages = v9fs_vfs_readpages,
 };
