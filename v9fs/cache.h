@@ -24,37 +24,44 @@
 #ifdef CONFIG_9P_FSCACHE
 #include <linux/fscache.h>
 
+extern struct kmem_cache *vcookie_cache;
+
 struct v9fs_cookie {
 	spinlock_t lock;
 	struct inode inode;
 	struct fscache_cookie *fscache;
-};
-
-struct fscache_netfs v9fs_cache_netfs = {
-	.name 		= "9p",
-	.version 	= 0,
-};
-
-struct fscache_cookie_def v9fs_cache_session_index_def = {
-	.name 		= "9P.session",
-	.type 		= FSCACHE_COOKIE_TYPE_INDEX,
-	.get_key 	= v9fs_cache_session_get_key,
-};
-
-struct fscache_cookie_def v9fs_cache_inode_index_def = {
-	.name		= "9p.inode",
-	.type		= FSCACHE_COOKIE_TYPE_DATAFILE,
-	.get_key	= v9fs_cache_inode_get_key,
-	.get_attr	= v9fs_cache_inode_get_attr,
-	.get_aux	= v9fs_cache_inode_get_aux,
-	.check_aux	= v9fs_cache_inode_check_aux,
-	.now_uncached	= v9fs_cache_inode_now_uncached,
+	struct p9_qid *qid;
 };
 
 static inline struct v9fs_cookie *v9fs_inode2cookie(const struct inode *inode)
 {
 	return container_of(inode, struct v9fs_cookie, inode);
 }
+
+extern struct fscache_netfs v9fs_cache_netfs;
+extern const struct fscache_cookie_def v9fs_cache_session_index_def;
+extern const struct fscache_cookie_def v9fs_cache_inode_index_def;
+
+void v9fs_cache_session_get_cookie(struct v9fs_session_info *v9ses);
+void v9fs_cache_session_put_cookie(struct v9fs_session_info *v9ses);
+
+void v9fs_cache_inode_get_cookie(struct inode *inode);
+void v9fs_cache_inode_put_cookie(struct inode *inode);
+void v9fs_cache_inode_flush_cookie(struct inode *inode);
+void v9fs_cache_inode_set_cookie(struct inode *inode, struct file *filp);
+void v9fs_cache_inode_reset_cookie(struct inode *inode);
+
+extern int __v9fs_cache_register(void);
+extern void __v9fs_cache_unregister(void);
+
+extern int __v9fs_readpage_from_fscache(struct inode *inode,
+					struct page *page);
+extern int __v9fs_readpages_from_fscache(struct inode *inode,
+					 struct address_space *mapping,
+					 struct list_head *pages,
+					 unsigned *nr_pages);
+extern void __v9fs_readpage_to_fscache(struct inode *inode, struct page *page);
+
 
 /**
  * v9fs_cache_register - Register v9fs file system with the cache
@@ -80,7 +87,7 @@ static inline int v9fs_readpage_from_fscache(struct inode *inode,
 
 static inline int v9fs_readpages_from_fscache(struct inode *inode,
 					      struct address_space *mapping,
-					      struct list_head *pages
+					      struct list_head *pages,
 					      unsigned *nr_pages)
 {
 	return __v9fs_readpages_from_fscache(inode, mapping, pages,
@@ -101,7 +108,17 @@ static inline void v9fs_uncache_page(struct inode *inode, struct page *page)
 	BUG_ON(PageFsCache(page));
 }
 
+static inline void v9fs_vcookie_set_qid(struct inode *inode,
+					struct p9_qid *qid)
+{
+	struct v9fs_cookie *vcookie = v9fs_inode2cookie(inode);
+	spin_lock(&vcookie->lock);
+	vcookie->qid = qid;
+	spin_unlock(&vcookie->lock);
+}
+
 #else /* CONFIG_9P_FSCACHE */
+
 static inline int v9fs_cache_register(void)
 {
 	return 0;
@@ -130,6 +147,9 @@ static inline void v9fs_readpage_to_fscache(struct inode *inode,
 static inline void v9fs_uncache_page(struct inode *inode, struct page *page)
 {}
 
+static inline void v9fs_vcookie_set_qid(struct inode *inode,
+					struct p9_qid *qid)
+{}
 
 #endif /* CONFIG_9P_FSCACHE */
 #endif /* _V9FS_CACHE_H */

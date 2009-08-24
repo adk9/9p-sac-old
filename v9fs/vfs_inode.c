@@ -40,6 +40,7 @@
 #include "v9fs.h"
 #include "v9fs_vfs.h"
 #include "fid.h"
+#include "cache.h"
 
 static const struct inode_operations v9fs_dir_inode_operations;
 static const struct inode_operations v9fs_dir_inode_operations_ext;
@@ -206,6 +207,8 @@ struct inode *v9fs_alloc_inode(struct super_block *sb)
 	if (!vcookie)
 		return NULL;
 
+	vcookie->fscache = NULL;
+	vcookie->qid = NULL;
 	return &vcookie->inode;
 }
 
@@ -284,6 +287,10 @@ struct inode *v9fs_get_inode(struct super_block *sb, int mode)
 		err = -EINVAL;
 		goto error;
 	}
+
+#ifdef CONFIG_9P_FSCACHE
+	v9fs_cache_inode_get_cookie(inode);
+#endif
 
 	return inode;
 
@@ -389,6 +396,7 @@ v9fs_inode_from_fid(struct v9fs_session_info *v9ses, struct p9_fid *fid,
 
 	v9fs_stat2inode(st, ret, sb);
 	ret->i_ino = v9fs_qid2ino(&st->qid);
+	v9fs_vcookie_set_qid(ret, &st->qid);
 	p9stat_free(st);
 	kfree(st);
 

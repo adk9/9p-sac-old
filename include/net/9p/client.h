@@ -177,9 +177,6 @@ struct p9_fid {
 	u32 iounit;
 	uid_t uid;
 	void *aux;
-#ifdef CONFIG_9P_FSCACHE
-	struct fscache_cookie *fscache;
-#endif
 
 	int rdir_fpos;
 	struct list_head flist;

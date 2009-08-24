@@ -40,6 +40,7 @@
 #include "v9fs.h"
 #include "v9fs_vfs.h"
 #include "fid.h"
+#include "cache.h"
 
 static const struct file_operations v9fs_cached_file_operations;
 
