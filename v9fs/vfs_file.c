@@ -85,6 +85,10 @@ int v9fs_file_open(struct inode *inode, struct file *file)
 		/* enable cached file options */
 		if(file->f_op == &v9fs_file_operations)
 			file->f_op = &v9fs_cached_file_operations;
+
+#ifdef CONFIG_9P_FSCACHE
+		v9fs_cache_inode_set_cookie(inode, file);
+#endif
 	}
 
 	return 0;

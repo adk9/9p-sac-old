@@ -38,6 +38,7 @@
 
 #include "v9fs.h"
 #include "v9fs_vfs.h"
+#include "cache.h"
 
 /**
  * v9fs_vfs_readpage - read an entire page in from 9P
@@ -52,18 +53,30 @@ static int v9fs_vfs_readpage(struct file *filp, struct page *page)
 	int retval;
 	loff_t offset;
 	char *buffer;
+	struct inode *inode;
+
+	inode = page->mapping->host;
 
 	P9_DPRINTK(P9_DEBUG_VFS, "\n");
+
+	retval = v9fs_readpage_from_fscache(inode, page);
+	if (retval == 0)
+		return retval;
+
 	buffer = kmap(page);
 	offset = page_offset(page);
 
 	retval = v9fs_file_readn(filp, buffer, NULL, PAGE_CACHE_SIZE, offset);
-	if (retval < 0)
+	if (retval < 0) {
+		v9fs_uncache_page(inode, page);
 		goto done;
+	}
 
 	memset(buffer + retval, 0, PAGE_CACHE_SIZE - retval);
 	flush_dcache_page(page);
 	SetPageUptodate(page);
+
+	v9fs_readpage_to_fscache(inode, page);
 	retval = 0;
 
 done:
@@ -86,8 +99,15 @@ static int v9fs_vfs_readpages(struct file *filp, struct address_space *mapping,
 			     struct list_head *pages, unsigned nr_pages)
 {
 	int ret = 0;
+	struct inode *inode;
 
-	P9_DPRINTK(P9_DEBUG_VFS, "inode: %p file: %p\n", mapping->host, filp);
+	inode = mapping->host;
+	P9_DPRINTK(P9_DEBUG_VFS, "inode: %p file: %p\n", inode, filp);
+
+	ret = v9fs_readpages_from_fscache(inode, mapping, pages, &nr_pages);
+	if (ret == 0)
+		return ret;
+
 	ret = read_cache_pages(mapping, pages, (void *)v9fs_vfs_readpage, filp);
 	P9_DPRINTK(P9_DEBUG_VFS, "  = %d\n", ret);
 	return ret;

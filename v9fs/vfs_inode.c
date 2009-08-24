@@ -197,6 +197,24 @@ v9fs_blank_wstat(struct p9_wstat *wstat)
 	wstat->extension = NULL;
 }
 
+#ifdef CONFIG_9P_FSCACHE
+struct inode *v9fs_alloc_inode(struct super_block *sb)
+{
+	struct v9fs_cookie *vcookie;
+	vcookie = (struct v9fs_cookie *)kmem_cache_alloc(vcookie_cache,
+							 GFP_KERNEL);
+	if (!vcookie)
+		return NULL;
+
+	return &vcookie->inode;
+}
+
+void v9fs_destroy_inode(struct inode *inode)
+{
+	kmem_cache_free(vcookie_cache, v9fs_inode2cookie(inode));
+}
+#endif
+
 /**
  * v9fs_get_inode - helper function to setup an inode
  * @sb: superblock
@@ -215,7 +233,7 @@ struct inode *v9fs_get_inode(struct super_block *sb, int mode)
 	inode = new_inode(sb);
 	if (!inode) {
 		P9_EPRINTK(KERN_WARNING, "Problem allocating inode\n");
-		return -ENOMEM;
+		return ERR_PTR(-ENOMEM);
 	}
 
 	inode->i_mode = mode;
@@ -326,6 +344,21 @@ error:
 }
 */
 
+
+/**
+ * v9fs_clear_inode - release an inode
+ * @inode: inode to release
+ *
+ */
+void v9fs_clear_inode(struct inode *inode)
+{
+	filemap_fdatawrite(inode->i_mapping);
+
+#ifdef CONFIG_9P_CACHE
+	v9fs_cache_inode_put_cookie(inode);
+#endif
+}
+
 /**
  * v9fs_inode_from_fid - populate an inode by issuing a attribute request
  * @v9ses: session information
@@ -358,6 +391,7 @@ v9fs_inode_from_fid(struct v9fs_session_info *v9ses, struct p9_fid *fid,
 	ret->i_ino = v9fs_qid2ino(&st->qid);
 	p9stat_free(st);
 	kfree(st);
+
 	return ret;
 
 error:

@@ -161,6 +161,7 @@ struct p9_client {
  * @iounit: the server reported maximum transaction size for this file
  * @uid: the numeric uid of the local user who owns this handle
  * @aux: transport specific information (unused?)
+ * @fscache: fid cookie associated with FS-Cache
  * @rdir_fpos: tracks offset of file position when reading directory contents
  * @flist: per-client-instance fid tracking
  * @dlist: per-dentry fid tracking
@@ -176,6 +177,9 @@ struct p9_fid {
 	u32 iounit;
 	uid_t uid;
 	void *aux;
+#ifdef CONFIG_9P_FSCACHE
+	struct fscache_cookie *fscache;
+#endif
 
 	int rdir_fpos;
 	struct list_head flist;
