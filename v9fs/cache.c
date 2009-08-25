@@ -131,7 +131,7 @@ void v9fs_cache_session_get_cookie(struct v9fs_session_info *v9ses)
 	v9ses->fscache = fscache_acquire_cookie(v9fs_cache_netfs.primary_index,
 						&v9fs_cache_session_index_def,
 						v9ses);
-	P9_DPRINTK(P9_DEBUG_FSC, "session %p got cookie %p", v9ses,
+	P9_DPRINTK(P9_DEBUG_FSC, "session %p get cookie %p", v9ses,
 		   v9ses->fscache);
 }
 
@@ -148,6 +148,8 @@ static uint16_t v9fs_cache_inode_get_key(const void *cookie_netfs_data,
 					 void *buffer, uint16_t bufmax)
 {
 	const struct v9fs_cookie *vcookie = cookie_netfs_data;
+	P9_DPRINTK(P9_DEBUG_FSC, "inode %p get key %llu", &vcookie->inode,
+		   vcookie->qid->path);
 	memcpy(buffer, &vcookie->qid->path, sizeof(vcookie->qid->path));
 	return sizeof(vcookie->qid->path);
 }
@@ -156,6 +158,8 @@ static void v9fs_cache_inode_get_attr(const void *cookie_netfs_data,
 				      uint64_t *size)
 {
 	const struct v9fs_cookie *vcookie = cookie_netfs_data;
+	P9_DPRINTK(P9_DEBUG_FSC, "inode %p get attr %llu", &vcookie->inode,
+		   vcookie->inode.i_size);
 
 	*size = vcookie->inode.i_size;
 }
@@ -164,6 +168,9 @@ static uint16_t v9fs_cache_inode_get_aux(const void *cookie_netfs_data,
 					 void *buffer, uint16_t buflen)
 {
 	const struct v9fs_cookie *vcookie = cookie_netfs_data;
+	P9_DPRINTK(P9_DEBUG_FSC, "inode %p get aux %u", &vcookie->inode,
+		   vcookie->qid->version);
+
 	memcpy(buffer, &vcookie->qid->version, sizeof(vcookie->qid->version));
 	return sizeof(vcookie->qid->version);
 }
@@ -240,7 +247,7 @@ void v9fs_cache_inode_get_cookie(struct inode *inode)
 						  &v9fs_cache_inode_index_def,
 						  vcookie);
 
-	P9_DPRINTK(P9_DEBUG_FSC, "inode %p got cookie %p", inode,
+	P9_DPRINTK(P9_DEBUG_FSC, "inode %p get cookie %p", inode,
 		   vcookie->fscache);
 }
 
@@ -263,7 +270,7 @@ void v9fs_cache_inode_flush_cookie(struct inode *inode)
 
 	if (!vcookie->fscache)
 		return;
-	P9_DPRINTK(P9_DEBUG_FSC, "inode %p put cookie %p", inode,
+	P9_DPRINTK(P9_DEBUG_FSC, "inode %p flush cookie %p", inode,
 		   vcookie->fscache);
 
 	if (inode->i_mapping && inode->i_mapping->nrpages)
@@ -279,12 +286,12 @@ void v9fs_cache_inode_set_cookie(struct inode *inode, struct file *filp)
 	struct p9_fid *fid;
 
 	if (!vcookie->fscache)
-		v9fs_cache_inode_get_cookie(inode);
+		return;
 
 	spin_lock(&vcookie->lock);
 	fid = filp->private_data;
 	if ((filp->f_flags & O_ACCMODE) != O_RDONLY)
-		v9fs_cache_inode_put_cookie(inode);
+		v9fs_cache_inode_flush_cookie(inode);
 	else
 		v9fs_cache_inode_get_cookie(inode);
 

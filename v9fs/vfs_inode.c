@@ -288,10 +288,6 @@ struct inode *v9fs_get_inode(struct super_block *sb, int mode)
 		goto error;
 	}
 
-#ifdef CONFIG_9P_FSCACHE
-	v9fs_cache_inode_get_cookie(inode);
-#endif
-
 	return inode;
 
 error:
@@ -361,7 +357,7 @@ void v9fs_clear_inode(struct inode *inode)
 {
 	filemap_fdatawrite(inode->i_mapping);
 
-#ifdef CONFIG_9P_CACHE
+#ifdef CONFIG_9P_FSCACHE
 	v9fs_cache_inode_put_cookie(inode);
 #endif
 }
@@ -397,6 +393,10 @@ v9fs_inode_from_fid(struct v9fs_session_info *v9ses, struct p9_fid *fid,
 	v9fs_stat2inode(st, ret, sb);
 	ret->i_ino = v9fs_qid2ino(&st->qid);
 	v9fs_vcookie_set_qid(ret, &st->qid);
+
+#ifdef CONFIG_9P_FSCACHE
+	v9fs_cache_inode_get_cookie(ret);
+#endif
 	p9stat_free(st);
 	kfree(st);
 
