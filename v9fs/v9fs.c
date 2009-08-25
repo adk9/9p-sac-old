@@ -99,7 +99,7 @@ static int v9fs_parse_options(struct v9fs_session_info *v9ses, char *opts)
 	if (!opts)
 		return 0;
 
-	options = kstrdup(v9ses->options, GFP_KERNEL);
+	options = kstrdup(opts, GFP_KERNEL);
 	if (!options)
 		goto fail_option_alloc;
 
