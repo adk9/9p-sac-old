@@ -79,7 +79,7 @@ static const match_table_t tokens = {
  * Return 0 upon success, -ERRNO upon failure.
  */
 
-static int v9fs_parse_options(struct v9fs_session_info *v9ses)
+static int v9fs_parse_options(struct v9fs_session_info *v9ses, char *opts)
 {
 	char *options;
 	substring_t args[MAX_OPT_ARGS];
@@ -96,7 +96,7 @@ static int v9fs_parse_options(struct v9fs_session_info *v9ses)
 	v9ses->cachetag = NULL;
 #endif
 
-	if (!v9ses->options)
+	if (!opts)
 		return 0;
 
 	options = kstrdup(v9ses->options, GFP_KERNEL);
@@ -231,24 +231,14 @@ struct p9_fid *v9fs_session_init(struct v9fs_session_info *v9ses,
 	v9ses->uid = ~0;
 	v9ses->dfltuid = V9FS_DEFUID;
 	v9ses->dfltgid = V9FS_DEFGID;
-	if (data) {
-		v9ses->options = kstrdup(data, GFP_KERNEL);
-		if (!v9ses->options) {
-			P9_DPRINTK(P9_DEBUG_ERROR,
-			   "failed to allocate copy of option string\n");
-			retval = -ENOMEM;
-			goto error;
-		}
-	}
 
-	rc = v9fs_parse_options(v9ses);
+	rc = v9fs_parse_options(v9ses, data);
 	if (rc < 0) {
 		retval = rc;
 		goto error;
 	}
 
-	v9ses->clnt = p9_client_create(dev_name, v9ses->options);
-
+	v9ses->clnt = p9_client_create(dev_name, data);
 	if (IS_ERR(v9ses->clnt)) {
 		retval = PTR_ERR(v9ses->clnt);
 		v9ses->clnt = NULL;
@@ -313,7 +303,6 @@ void v9fs_session_close(struct v9fs_session_info *v9ses)
 #endif
 	__putname(v9ses->uname);
 	__putname(v9ses->aname);
-	kfree(v9ses->options);
 }
 
 /**
